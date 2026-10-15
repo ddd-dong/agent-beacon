@@ -59,7 +59,8 @@ ntype="$(field notification_type)"
 # 只送名字本身。PostToolUse 太頻繁，不查。
 title=""
 if [ "$agent" = claude ] && [ "$event" != PostToolUse ]; then
-  tp="$(field transcript_path)"
+  # Windows 的路徑在 JSON 裡是 C:\\Users\\...，轉成 C:/Users/... Git Bash 才讀得到
+  tp="$(field transcript_path | sed 's|\\\\|/|g')"
   [ -n "$tp" ] && [ -r "$tp" ] && title="$(grep -o '"customTitle":"[^"]*"' "$tp" 2>/dev/null | tail -n 1 \
     | sed 's/^"customTitle":"//; s/"$//; s/\\*$//')"
 fi

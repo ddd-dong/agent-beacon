@@ -60,6 +60,11 @@ codex_install() {
   touch "$CODEX_CONF"
   line="$(codex_notify_line)"
   ours="notify = [\"$BEACON\", \"codex\"]"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      # Windows：Codex 不能直接執行 sh 腳本，改由 Git Bash 的 bash.exe 執行（路徑用正斜線）
+      ours="notify = [\"$(cygpath -m /usr/bin/bash)\", \"$(cygpath -m "$BEACON")\", \"codex\"]" ;;
+  esac
   case "$line" in
     *agent-beacon*)
       say "Codex notify 已指向 beacon"

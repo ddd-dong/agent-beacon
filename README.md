@@ -33,3 +33,17 @@ prompt、Claude 回覆、工具指令與檔案內容一律不送，也不掛 Pre
 | Codex | notify 的 `agent-turn-complete` |
 
 `beacon` 永遠 exit 0、不輸出任何東西、背景 POST（2 秒 timeout），不會卡住 agent。
+
+## Windows
+
+需要 [Git for Windows](https://git-scm.com/download/win)：Claude Code 在 Windows 上透過 Git Bash 執行 hook（沒有 Git Bash 時改用 PowerShell，beacon 就跑不起來）。
+
+在 PowerShell 安裝（交給 Git Bash 執行同一支 install.sh）：
+
+```powershell
+& "$env:ProgramFiles\Git\bin\bash.exe" -lc 'curl -fsSL https://raw.githubusercontent.com/ddd-dong/agent-beacon/main/install.sh | sh -s -- --token <機器 token> ...'
+```
+
+或直接開 Git Bash 貼上 macOS / Linux 的指令。儀表板產生的安裝指令兩種都有。
+
+Codex 在 Windows 上的 notify 會設成 `["C:/Program Files/Git/usr/bin/bash.exe", "<beacon>", "codex"]`（未在實機驗證）。
