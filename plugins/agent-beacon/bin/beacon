@@ -34,11 +34,12 @@ fi
 [ -r "$CONF_DIR/env" ] && . "$CONF_DIR/env"
 [ -n "${BEACON_URL:-}" ] && [ -n "${BEACON_TOKEN:-}" ] || exit 0
 
-# 從單行 JSON 取字串欄位。跳脫過的引號（例如 prompt 裡的 \"cwd\"）不會被誤認成 key。
+# 從 JSON 取字串欄位，取第一個出現的（頂層欄位在前，工具參數裡的同名 key 在後）。
+# 跳脫過的引號（例如 prompt 裡的 \"cwd\"）不會被誤認成 key。
 field() {
   printf '%s\n' "$payload" | tr '\n' ' ' \
-    | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
-    | sed 's/\\$//' | head -n 1
+    | grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -n 1 \
+    | sed "s/^\"$1\"[[:space:]]*:[[:space:]]*\"//; s/\"\$//; s/\\\\*\$//"
 }
 
 if [ "$agent" = codex ]; then
@@ -48,7 +49,9 @@ else
   event="$(field hook_event_name)"
   session="$(field session_id)"
 fi
-cwd="$(field cwd)"
+# PostToolUse 的 payload 含工具參數與輸出，只取事件名與 session id
+cwd=""
+[ "$event" = PostToolUse ] || cwd="$(field cwd)"
 ntype="$(field notification_type)"
 [ -n "$event" ] && [ -n "$session" ] || exit 0
 
