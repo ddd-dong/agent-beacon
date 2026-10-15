@@ -1,0 +1,12 @@
+{
+  "name": "agent-beacon",
+  "description": "把 Claude Code session 狀態轉發到個人儀表板",
+  "owner": { "name": "ddd-dong" },
+  "plugins": [
+    {
+      "name": "agent-beacon",
+      "source": "./plugins/agent-beacon",
+      "description": "SessionStart / UserPromptSubmit / Notification / Stop / SessionEnd 事件轉發（不含 prompt 內容）"
+    }
+  ]
+}

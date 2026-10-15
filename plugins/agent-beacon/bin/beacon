@@ -1,0 +1,74 @@
+#!/bin/sh
+# agent-beacon：把 agent 事件轉發到儀表板。
+#
+#   Claude Code hook：beacon claude        （事件 JSON 從 stdin 進來）
+#   Codex notify：    beacon codex '<json>'（事件 JSON 是最後一個參數）
+#
+# 規則：
+#   - 只送事件名、session id、cwd、host、agent、時間；prompt、回覆、工具內容一律不送
+#   - 背景 POST，2 秒 timeout，永遠 exit 0
+#   - 不輸出任何東西（UserPromptSubmit / SessionStart 的 stdout 會被注入 Claude 的 context）
+
+exec >/dev/null 2>&1
+
+agent="${1:-claude}"
+[ $# -gt 0 ] && shift
+
+if [ "$agent" = codex ]; then
+  payload="${1:-}"
+else
+  payload="$(cat)"
+fi
+
+CONF_DIR="${AGENT_BEACON_HOME:-$HOME/.config/agent-beacon}"
+
+# Codex：安裝前若已有 notify，原本的指令照樣執行（一行一個參數）
+if [ "$agent" = codex ] && [ -r "$CONF_DIR/codex-notify-orig" ]; then
+  (
+    set --
+    while IFS= read -r arg || [ -n "$arg" ]; do set -- "$@" "$arg"; done < "$CONF_DIR/codex-notify-orig"
+    [ $# -gt 0 ] && "$@" "$payload"
+  ) &
+fi
+
+[ -r "$CONF_DIR/env" ] && . "$CONF_DIR/env"
+[ -n "${BEACON_URL:-}" ] && [ -n "${BEACON_TOKEN:-}" ] || exit 0
+
+# 從單行 JSON 取字串欄位。跳脫過的引號（例如 prompt 裡的 \"cwd\"）不會被誤認成 key。
+field() {
+  printf '%s\n' "$payload" | tr '\n' ' ' \
+    | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
+    | sed 's/\\$//' | head -n 1
+}
+
+if [ "$agent" = codex ]; then
+  event="$(field type)"
+  session="$(field thread-id)"
+else
+  event="$(field hook_event_name)"
+  session="$(field session_id)"
+fi
+cwd="$(field cwd)"
+ntype="$(field notification_type)"
+[ -n "$event" ] && [ -n "$session" ] || exit 0
+
+host="$(hostname 2>/dev/null || uname -n)"
+ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+body=$(printf '{"event":"%s","session_id":"%s","agent":"%s","cwd":"%s","host":"%s","ts":"%s","notification_type":"%s"}' \
+  "$event" "$session" "$agent" "$cwd" "$host" "$ts" "$ntype")
+
+set -- -fsS -m 2 -X POST -H "Content-Type: application/json" --data "$body"
+[ -n "${BEACON_CACERT:-}" ] && set -- "$@" --cacert "$BEACON_CACERT"
+[ "${BEACON_INSECURE:-0}" = 1 ] && set -- "$@" -k
+
+# 有 setsid 就脫離 hook 的行程群組，agent 結束（SessionEnd）時請求不會被一起砍掉
+detach=""
+command -v setsid >/dev/null 2>&1 && detach="setsid"
+
+# token 走 curl 的 config stdin，不出現在 ps 的指令列
+(
+  trap '' HUP
+  printf 'header = "Authorization: Bearer %s"\n' "$BEACON_TOKEN" \
+    | $detach curl -K - "$@" "${BEACON_URL%/}/api/agent/events" &
+) &
+exit 0

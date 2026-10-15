@@ -1,0 +1,4 @@
+{
+  "name": "agent-beacon",
+  "description": "把 Claude Code session 狀態轉發到個人儀表板（只送事件名、session id、cwd、時間）"
+}
