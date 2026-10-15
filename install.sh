@@ -100,8 +100,9 @@ codex_uninstall() {
 claude_settings_autoupdate() {
   settings="$HOME/.claude/settings.json"
   [ -f "$settings" ] || return 0
-  if have python3; then
-    python3 - "$settings" "$MARKET" <<'PY'
+  # Windows 的 python3 常是開 Microsoft Store 的空殼：先確認真的能跑
+  if have python3 && python3 -c "" >/dev/null 2>&1; then
+    python3 - "$settings" "$MARKET" <<'PY' || { say "開啟 auto-update 失敗，請在 Claude Code 裡用 /plugin → Marketplaces 開啟"; return 0; }
 import json, sys
 path, name = sys.argv[1], sys.argv[2]
 with open(path) as f:

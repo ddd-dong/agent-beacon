@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/ddd-dong/agent-beacon/main/install.
 
 ## 送出的資料
 
-只有：事件名、session id、cwd、hostname、agent（claude / codex）、時間、notification 類型。
+只有：事件名、session id、cwd、hostname、agent（claude / codex）、時間、notification 類型，以及你用 `/rename` 取的 session 名稱（從 transcript 裡的 custom-title 讀出，只送名字本身）。
 prompt、Claude 回覆、工具指令與檔案內容一律不送，也不掛 PreToolUse。PostToolUse 只用來知道「核准權限後 Claude 繼續在跑」，它的 payload 含工具輸入輸出，beacon 連 cwd 都不從裡面取。
 
 ## 掛的事件
