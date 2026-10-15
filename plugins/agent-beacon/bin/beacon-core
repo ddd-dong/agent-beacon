@@ -12,19 +12,61 @@
 
 exec >/dev/null 2>&1
 
-# 儀表板用這個判斷 session 是不是還在用舊版 beacon（hook 在 session 啟動時載入，更新後要重開才生效）
-BEACON_VERSION=6
+# 儀表板用這個判斷 session 是不是還在用舊版 beacon
+BEACON_VERSION=7
 
 agent="${1:-claude}"
 [ $# -gt 0 ] && shift
 
-if [ "$agent" = codex ]; then
+
+CONF_DIR="${AGENT_BEACON_HOME:-$HOME/.config/agent-beacon}"
+
+# 送一筆只有事件名的事件（給背景監看用）
+post_simple() {
+  [ -r "$CONF_DIR/env" ] && . "$CONF_DIR/env"
+  [ -n "${BEACON_URL:-}" ] && [ -n "${BEACON_TOKEN:-}" ] || return 0
+  set -- -fsS -m 5 -X POST -H "Content-Type: application/json" \
+    --data "$(printf '{"event":"%s","session_id":"%s","agent":"claude","beacon":%s}' "$1" "$2" "$BEACON_VERSION")"
+  [ -n "${BEACON_CACERT:-}" ] && set -- "$@" --cacert "$BEACON_CACERT"
+  [ "${BEACON_INSECURE:-0}" = 1 ] && set -- "$@" -k
+  [ -n "${BEACON_CURL_EXTRA:-}" ] && set -- "$@" $BEACON_CURL_EXTRA
+  printf 'header = "Authorization: Bearer %s"\n' "$BEACON_TOKEN" | curl -K - "$@" "${BEACON_URL%/}/api/agent/events"
+}
+
+# Claude Code 底下、Bash 工具開的 shell（命令列含 shell-snapshots）
+bash_tool_shells() {
+  for c in $(pgrep -P "$1" 2>/dev/null); do
+    ps -o args= -p "$c" 2>/dev/null | grep -q "shell-snapshots" && echo "$c"
+  done
+}
+
+if [ "$agent" = __watch ]; then
+  :
+elif [ "$agent" = codex ]; then
   payload="${1:-}"
 else
   payload="$(cat)"
 fi
 
-CONF_DIR="${AGENT_BEACON_HOME:-$HOME/.config/agent-beacon}"
+# 背景監看模式：權限視窗跳出後，等 Claude Code 開出新的 Bash shell（= 使用者核准、指令開始跑），
+# 回報 PermissionGranted 讓儀表板切回 running。hook 沒有「核准之後」的事件，這是唯一可靠的訊號。
+# 參數：__watch <claude pid> <session id> "<當下已存在的 shell pid>" <pid 檔>
+if [ "$agent" = __watch ]; then
+  cpid=$1 session=$2 base=" $3 " pidfile=$4
+  echo "$$" > "$pidfile"  # 自己寫入：同一個 session 新的監看啟動時，舊的看到不是自己就結束
+  n=0
+  while [ "$n" -lt 600 ]; do  # 每 3 秒一次，最多 30 分鐘
+    sleep 3
+    n=$((n + 1))
+    kill -0 "$cpid" 2>/dev/null || break
+    [ "$(cat "$pidfile" 2>/dev/null)" = "$$" ] || exit 0  # 已有更新的監看接手
+    for c in $(bash_tool_shells "$cpid"); do
+      case "$base" in *" $c "*) ;; *) post_simple PermissionGranted "$session"; rm -f "$pidfile"; exit 0 ;; esac
+    done
+  done
+  rm -f "$pidfile"
+  exit 0
+fi
 
 # Codex：安裝前若已有 notify，原本的指令照樣執行（一行一個參數）
 if [ "$agent" = codex ] && [ -r "$CONF_DIR/codex-notify-orig" ]; then
@@ -53,16 +95,16 @@ else
   event="$(field hook_event_name)"
   session="$(field session_id)"
 fi
-# PostToolUse 的 payload 含工具參數與輸出，只取事件名與 session id
+# PostToolUse / PostToolUseFailure 的 payload 含工具參數與輸出，只取事件名與 session id
 cwd=""
-[ "$event" = PostToolUse ] || cwd="$(field cwd)"
+case "$event" in PostToolUse|PostToolUseFailure) ;; *) cwd="$(field cwd)" ;; esac
 ntype="$(field notification_type)"
 [ -n "$event" ] && [ -n "$session" ] || exit 0
 
 # 使用者用 /rename 取的名字：transcript 裡最後一筆 custom-title（自動產生的 ai-title 不算）。
 # 只送名字本身。PostToolUse 太頻繁，不查。
 title=""
-if [ "$agent" = claude ] && [ "$event" != PostToolUse ]; then
+if [ "$agent" = claude ] && [ "$event" != PostToolUse ] && [ "$event" != PostToolUseFailure ]; then
   # Windows 的路徑在 JSON 裡是 C:\\Users\\...，轉成 C:/Users/... Git Bash 才讀得到
   tp="$(field transcript_path | sed 's|\\\\|/|g')"
   [ -n "$tp" ] && [ -r "$tp" ] && title="$(grep -o '"customTitle":"[^"]*"' "$tp" 2>/dev/null | tail -n 1 \
@@ -119,6 +161,26 @@ if [ "$agent" = claude ] && [ "$event" = Stop ]; then
   case "$background" in "{"*"}") ;; *) background="null" ;; esac
   background_all="$(printf '%s' "$payload" | background_counts all 2>/dev/null)"
   case "$background_all" in "{"*"}") ;; *) background_all="null" ;; esac
+fi
+
+# 權限視窗跳出：在背景監看使用者有沒有核准（Linux / macOS；Windows 看不到原生 Claude Code 的子行程，略過）
+if [ "$agent" = claude ] && [ "$event" = Notification ] && [ "$ntype" = permission_prompt ] \
+   && command -v pgrep >/dev/null 2>&1; then
+  p=$PPID cpid="" i=0
+  while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null && [ "$i" -lt 8 ]; do
+    case "$(ps -o comm= -p "$p" 2>/dev/null | sed 's/^ *//; s/ *$//; s|.*/||')" in
+      claude|claude.exe|node) cpid=$p; break ;;
+    esac
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    i=$((i + 1))
+  done
+  if [ -n "$cpid" ]; then
+    pidfile="$CONF_DIR/watch-$(printf '%s' "$session" | tr -cd 'A-Za-z0-9-').pid"
+    base=$(bash_tool_shells "$cpid" | tr '\n' ' ')
+    w=""
+    command -v setsid >/dev/null 2>&1 && w="setsid"
+    ( trap '' HUP; $w sh "$0" __watch "$cpid" "$session" "$base" "$pidfile" </dev/null & )
+  fi
 fi
 
 host="$(hostname 2>/dev/null || uname -n)"

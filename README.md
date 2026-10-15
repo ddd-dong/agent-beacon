@@ -29,7 +29,7 @@ prompt、Claude 回覆、工具指令與檔案內容一律不送，也不掛 Pre
 
 | Agent | 事件 |
 | --- | --- |
-| Claude Code | SessionStart、UserPromptSubmit、PostToolUse（只送事件名，不送工具內容）、Notification（權限、等輸入、elicitation）、Stop、SessionEnd |
+| Claude Code | SessionStart、UserPromptSubmit、PostToolUse / PostToolUseFailure（只送事件名，不送工具內容）、Notification（權限、等輸入、elicitation）、Stop、SessionEnd |
 | Codex | notify 的 `agent-turn-complete` |
 
 `beacon` 是啟動器：每次執行已安裝的最新版 `beacon-core`，plugin 自動更新後已開著的 session 也會用到新版，不用重開。`beacon-core` 永遠 exit 0、不輸出任何東西、背景 POST（2 秒 timeout），不會卡住 agent。
@@ -47,3 +47,9 @@ prompt、Claude 回覆、工具指令與檔案內容一律不送，也不掛 Pre
 或直接開 Git Bash 貼上 macOS / Linux 的指令。儀表板產生的安裝指令兩種都有。
 
 Codex 在 Windows 上的 notify 會設成 `["C:/Program Files/Git/usr/bin/bash.exe", "<beacon>", "codex"]`（未在實機驗證）。
+
+## 權限核准後的狀態
+
+Claude Code 沒有「使用者核准權限之後」的 hook，核准後到工具跑完之間拿不到事件。權限視窗跳出時，beacon 會在背景監看
+Claude Code 有沒有開出新的 Bash shell（命令列含 `shell-snapshots`），開出來 = 已核准、指令開始跑，就回報
+`PermissionGranted`。每 3 秒檢查、最多 30 分鐘；只看本機行程，只送事件名。Windows（Git Bash 看不到原生 Claude Code 的子行程）不啟用。
