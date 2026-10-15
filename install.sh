@@ -161,7 +161,8 @@ claude_install() {
     claude plugin marketplace add "$REPO" --scope user
   fi
   if claude plugin list 2>/dev/null | grep -q "$PLUGIN"; then
-    say "plugin 已安裝"
+    # 重跑 = 修復：已安裝就更新到最新版
+    claude plugin update "$PLUGIN" --scope user 2>&1 | tail -n 1
   else
     claude plugin install "$PLUGIN" --scope user -y
   fi
