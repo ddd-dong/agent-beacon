@@ -13,7 +13,7 @@
 exec >/dev/null 2>&1
 
 # 儀表板用這個判斷 session 是不是還在用舊版 beacon（hook 在 session 啟動時載入，更新後要重開才生效）
-BEACON_VERSION=5
+BEACON_VERSION=6
 
 agent="${1:-claude}"
 [ $# -gt 0 ] && shift
@@ -73,7 +73,8 @@ fi
 # payload 可能是多行 JSON、字串裡可能有任何字元，所以用 awk 逐字解析，只看 background_tasks 陣列
 # 裡每個物件的 type 與 status，略過已結束的。輸出例如 {"shell":1,"monitor":2}。
 background_counts() {
-  awk 'BEGIN { RS = "\001" }
+  # $1 = all：不過濾、以「類型:狀態」計數（診斷用：文件沒列出 status 的可能值）
+  awk -v mode="${1:-active}" 'BEGIN { RS = "\001" }
   {
     s = $0; n = length(s); depth = 0; instr = 0; esc = 0; tok = ""; key = ""; inbg = 0; bgd = 0
     for (i = 1; i <= n; i++) {
@@ -96,8 +97,10 @@ background_counts() {
         key = ""; continue
       }
       if (c == "}" || c == "]") {
-        if (inbg && c == "}" && depth == bgd + 1 && t != "" &&
-            tolower(st) !~ /^(completed|complete|done|failed|killed|stopped|cancell?ed|error|exited)$/) cnt[t]++
+        if (inbg && c == "}" && depth == bgd + 1 && t != "") {
+          if (mode == "all") cnt[t ":" (st == "" ? "none" : st)]++
+          else if (tolower(st) !~ /^(completed|complete|done|failed|killed|stopped|cancell?ed|error|exited)$/) cnt[t]++
+        }
         if (inbg && c == "]" && depth == bgd) inbg = 0
         depth--
       }
@@ -105,20 +108,23 @@ background_counts() {
   }
   END {
     out = ""
-    for (k in cnt) { name = tolower(k); gsub(/[^a-z0-9]+/, "_", name); out = out (out == "" ? "" : ",") "\"" name "\":" cnt[k] }
+    for (k in cnt) { name = tolower(k); gsub(/[^a-z0-9:]+/, "_", name); out = out (out == "" ? "" : ",") "\"" name "\":" cnt[k] }
     printf "{%s}", out
   }'
 }
 background="null"
+background_all="null"
 if [ "$agent" = claude ] && [ "$event" = Stop ]; then
   background="$(printf '%s' "$payload" | background_counts 2>/dev/null)"
   case "$background" in "{"*"}") ;; *) background="null" ;; esac
+  background_all="$(printf '%s' "$payload" | background_counts all 2>/dev/null)"
+  case "$background_all" in "{"*"}") ;; *) background_all="null" ;; esac
 fi
 
 host="$(hostname 2>/dev/null || uname -n)"
 ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-body=$(printf '{"event":"%s","session_id":"%s","agent":"%s","cwd":"%s","host":"%s","ts":"%s","notification_type":"%s","title":"%s","background":%s,"beacon":%s}' \
-  "$event" "$session" "$agent" "$cwd" "$host" "$ts" "$ntype" "$title" "$background" "$BEACON_VERSION")
+body=$(printf '{"event":"%s","session_id":"%s","agent":"%s","cwd":"%s","host":"%s","ts":"%s","notification_type":"%s","title":"%s","background":%s,"background_all":%s,"beacon":%s}' \
+  "$event" "$session" "$agent" "$cwd" "$host" "$ts" "$ntype" "$title" "$background" "$background_all" "$BEACON_VERSION")
 
 set -- -fsS -m 2 -X POST -H "Content-Type: application/json" --data "$body"
 [ -n "${BEACON_CACERT:-}" ] && set -- "$@" --cacert "$BEACON_CACERT"
