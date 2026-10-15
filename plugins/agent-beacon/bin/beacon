@@ -12,6 +12,9 @@
 
 exec >/dev/null 2>&1
 
+# 儀表板用這個判斷 session 是不是還在用舊版 beacon（hook 在 session 啟動時載入，更新後要重開才生效）
+BEACON_VERSION=4
+
 agent="${1:-claude}"
 [ $# -gt 0 ] && shift
 
@@ -114,8 +117,8 @@ fi
 
 host="$(hostname 2>/dev/null || uname -n)"
 ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-body=$(printf '{"event":"%s","session_id":"%s","agent":"%s","cwd":"%s","host":"%s","ts":"%s","notification_type":"%s","title":"%s","background":%s}' \
-  "$event" "$session" "$agent" "$cwd" "$host" "$ts" "$ntype" "$title" "$background")
+body=$(printf '{"event":"%s","session_id":"%s","agent":"%s","cwd":"%s","host":"%s","ts":"%s","notification_type":"%s","title":"%s","background":%s,"beacon":%s}' \
+  "$event" "$session" "$agent" "$cwd" "$host" "$ts" "$ntype" "$title" "$background" "$BEACON_VERSION")
 
 set -- -fsS -m 2 -X POST -H "Content-Type: application/json" --data "$body"
 [ -n "${BEACON_CACERT:-}" ] && set -- "$@" --cacert "$BEACON_CACERT"
