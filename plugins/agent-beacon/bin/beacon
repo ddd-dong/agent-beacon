@@ -5,7 +5,8 @@
 #   Codex notify：    beacon codex '<json>'（事件 JSON 是最後一個參數）
 #
 # 規則：
-#   - 只送事件名、session id、cwd、host、agent、時間、/rename 取的名字；prompt、回覆、工具內容一律不送
+#   - 只送事件名、session id、cwd、host、agent、時間、/rename 取的名字、背景工作的類型與數量；
+#     prompt、回覆、工具內容、背景工作的指令與描述一律不送
 #   - 背景 POST，2 秒 timeout，永遠 exit 0
 #   - 不輸出任何東西（UserPromptSubmit / SessionStart 的 stdout 會被注入 Claude 的 context）
 
@@ -65,10 +66,56 @@ if [ "$agent" = claude ] && [ "$event" != PostToolUse ]; then
     | sed 's/^"customTitle":"//; s/"$//; s/\\*$//')"
 fi
 
+# Stop 時還在跑的背景工作（背景 shell、Monitor、subagent…）：只數類型，不送指令或描述。
+# payload 可能是多行 JSON、字串裡可能有任何字元，所以用 awk 逐字解析，只看 background_tasks 陣列
+# 裡每個物件的 type 與 status，略過已結束的。輸出例如 {"shell":1,"monitor":2}。
+background_counts() {
+  awk 'BEGIN { RS = "\001" }
+  {
+    s = $0; n = length(s); depth = 0; instr = 0; esc = 0; tok = ""; key = ""; inbg = 0; bgd = 0
+    for (i = 1; i <= n; i++) {
+      c = substr(s, i, 1)
+      if (instr) {
+        if (esc) { esc = 0; tok = tok c; continue }
+        if (c == "\\") { esc = 1; continue }
+        if (c != "\"") { tok = tok c; continue }
+        instr = 0
+        j = i + 1; while (j <= n && substr(s, j, 1) ~ /[ \t\r\n]/) j++
+        if (substr(s, j, 1) == ":") { key = tok; continue }
+        if (inbg && depth == bgd + 1) { if (key == "type") t = tok; else if (key == "status") st = tok }
+        key = ""; continue
+      }
+      if (c == "\"") { instr = 1; tok = ""; continue }
+      if (c == "{" || c == "[") {
+        depth++
+        if (c == "[" && key == "background_tasks" && depth == 2) { inbg = 1; bgd = depth }
+        if (inbg && c == "{" && depth == bgd + 1) { t = ""; st = "" }
+        key = ""; continue
+      }
+      if (c == "}" || c == "]") {
+        if (inbg && c == "}" && depth == bgd + 1 && t != "" &&
+            tolower(st) !~ /^(completed|complete|done|failed|killed|stopped|cancell?ed|error|exited)$/) cnt[t]++
+        if (inbg && c == "]" && depth == bgd) inbg = 0
+        depth--
+      }
+    }
+  }
+  END {
+    out = ""
+    for (k in cnt) { name = tolower(k); gsub(/[^a-z0-9]+/, "_", name); out = out (out == "" ? "" : ",") "\"" name "\":" cnt[k] }
+    printf "{%s}", out
+  }'
+}
+background="null"
+if [ "$agent" = claude ] && [ "$event" = Stop ]; then
+  background="$(printf '%s' "$payload" | background_counts 2>/dev/null)"
+  case "$background" in "{"*"}") ;; *) background="null" ;; esac
+fi
+
 host="$(hostname 2>/dev/null || uname -n)"
 ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-body=$(printf '{"event":"%s","session_id":"%s","agent":"%s","cwd":"%s","host":"%s","ts":"%s","notification_type":"%s","title":"%s"}' \
-  "$event" "$session" "$agent" "$cwd" "$host" "$ts" "$ntype" "$title")
+body=$(printf '{"event":"%s","session_id":"%s","agent":"%s","cwd":"%s","host":"%s","ts":"%s","notification_type":"%s","title":"%s","background":%s}' \
+  "$event" "$session" "$agent" "$cwd" "$host" "$ts" "$ntype" "$title" "$background")
 
 set -- -fsS -m 2 -X POST -H "Content-Type: application/json" --data "$body"
 [ -n "${BEACON_CACERT:-}" ] && set -- "$@" --cacert "$BEACON_CACERT"
