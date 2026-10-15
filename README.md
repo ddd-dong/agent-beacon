@@ -8,7 +8,9 @@
 curl -fsSL https://raw.githubusercontent.com/ddd-dong/agent-beacon/main/install.sh | sh -s -- --token <機器 token>
 ```
 
-儀表板用自簽憑證時，加上 `--cacert <儀表板的 root.crt>`（或暫時用 `--insecure`）。
+最方便的方式：在儀表板 Agent 卡片的展開視窗「新增機器」，會直接產生帶好 token 與憑證的完整指令。
+
+手動安裝時，儀表板用自簽憑證要加上 `--cacert <儀表板的 root.crt>` 或 `--cacert-b64 <base64>`（或暫時用 `--insecure`）。
 
 重跑同一行 = 修復。移除：`... | sh -s -- --uninstall`。
 

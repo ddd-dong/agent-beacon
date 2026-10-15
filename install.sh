@@ -7,6 +7,7 @@
 #   --token T        這台機器的 token（安裝時必填）
 #   --url URL        儀表板位址（預設見 DEFAULT_URL）
 #   --cacert FILE    用這個 CA 憑證驗證儀表板（自簽憑證時用）
+#   --cacert-b64 B   同上，但直接給 base64 編碼的憑證內容（儀表板產生的安裝指令用這個）
 #   --insecure       不驗證儀表板憑證（不建議，只在暫時沒有正式憑證時用）
 #   --uninstall      移除 plugin、Codex 設定與本機設定
 set -eu
@@ -22,12 +23,13 @@ SHARE_DIR="$HOME/.local/share/agent-beacon"
 BEACON="$SHARE_DIR/beacon"
 CODEX_CONF="${CODEX_HOME:-$HOME/.codex}/config.toml"
 
-token="" url="$DEFAULT_URL" cacert="" insecure=0 uninstall=0
+token="" url="$DEFAULT_URL" cacert="" cacert_b64="" insecure=0 uninstall=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --token) token="$2"; shift 2 ;;
     --url) url="$2"; shift 2 ;;
     --cacert) cacert="$2"; shift 2 ;;
+    --cacert-b64) cacert_b64="$2"; shift 2 ;;
     --insecure) insecure=1; shift ;;
     --uninstall) uninstall=1; shift ;;
     *) echo "未知選項：$1" >&2; exit 2 ;;
@@ -170,7 +172,13 @@ else
 fi
 chmod 755 "$BEACON.tmp" && mv "$BEACON.tmp" "$BEACON"
 
-if [ -n "$cacert" ]; then
+if [ -n "$cacert_b64" ]; then
+  # GNU 用 -d，舊版 macOS 用 -D
+  printf '%s' "$cacert_b64" | base64 -d > "$CONF_DIR/ca.crt" 2>/dev/null \
+    || printf '%s' "$cacert_b64" | base64 -D > "$CONF_DIR/ca.crt"
+  grep -q "BEGIN CERTIFICATE" "$CONF_DIR/ca.crt" || { echo "--cacert-b64 不是有效的憑證" >&2; exit 2; }
+  cacert="$CONF_DIR/ca.crt"
+elif [ -n "$cacert" ]; then
   cp "$cacert" "$CONF_DIR/ca.crt"
   cacert="$CONF_DIR/ca.crt"
 fi
