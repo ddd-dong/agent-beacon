@@ -73,6 +73,8 @@ body=$(printf '{"event":"%s","session_id":"%s","agent":"%s","cwd":"%s","host":"%
 set -- -fsS -m 2 -X POST -H "Content-Type: application/json" --data "$body"
 [ -n "${BEACON_CACERT:-}" ] && set -- "$@" --cacert "$BEACON_CACERT"
 [ "${BEACON_INSECURE:-0}" = 1 ] && set -- "$@" -k
+# Windows Schannel 的 --ssl-no-revoke 等（install.sh 偵測後寫進 env）
+[ -n "${BEACON_CURL_EXTRA:-}" ] && set -- "$@" $BEACON_CURL_EXTRA
 
 # 有 setsid 就脫離 hook 的行程群組，agent 結束（SessionEnd）時請求不會被一起砍掉
 detach=""

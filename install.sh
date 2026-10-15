@@ -123,6 +123,26 @@ PY
     tmp="$(mktemp)"
     jq --arg n "$MARKET" 'if .extraKnownMarketplaces[$n] then .extraKnownMarketplaces[$n].autoUpdate = true else . end' \
       "$settings" > "$tmp" && mv "$tmp" "$settings"
+  elif have powershell.exe && have cygpath; then
+    cp "$settings" "$settings.agent-beacon.bak"
+    ps1="$SHARE_DIR/set-autoupdate.ps1"
+    cat > "$ps1" <<'PS'
+param([string]$Path, [string]$Name)
+$j = [IO.File]::ReadAllText($Path) | ConvertFrom-Json
+$m = $j.extraKnownMarketplaces.$Name
+if ($null -eq $m) { exit 0 }
+$m | Add-Member -NotePropertyName autoUpdate -NotePropertyValue $true -Force
+$out = $j | ConvertTo-Json -Depth 100
+$null = $out | ConvertFrom-Json   # 寫回前確認是合法 JSON
+[IO.File]::WriteAllText($Path, $out)   # UTF-8 無 BOM
+PS
+    if ! powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$ps1")" \
+        "$(cygpath -w "$settings")" "$MARKET" >/dev/null 2>&1; then
+      mv "$settings.agent-beacon.bak" "$settings"
+      say "開啟 auto-update 失敗（已還原 settings.json），請在 Claude Code 裡用 /plugin → Marketplaces 開啟"
+      return 0
+    fi
+    rm -f "$ps1"
   else
     say "沒有 python3 或 jq，請在 Claude Code 裡用 /plugin → Marketplaces → agent-beacon 開啟 auto-update"
     return 0
@@ -169,6 +189,11 @@ have curl || { echo "需要 curl" >&2; exit 1; }
 umask 077
 mkdir -p "$CONF_DIR" "$SHARE_DIR"
 
+# Windows（Git for Windows）的 curl 用 Schannel：自簽 CA 沒有撤銷清單可查，會被當成驗證失敗。
+# 憑證本身仍用 --cacert 驗證，只是不查撤銷狀態。
+curl_extra=""
+curl -V 2>/dev/null | grep -qi schannel && curl_extra="--ssl-no-revoke"
+
 # Codex 用的 beacon 固定放在這裡（Claude Code 用 plugin 自己的那份）
 here="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
 if [ -n "$here" ] && [ -f "$here/plugins/agent-beacon/bin/beacon" ]; then
@@ -193,6 +218,7 @@ fi
   printf 'BEACON_TOKEN=%s\n' "$token"
   [ -n "$cacert" ] && printf 'BEACON_CACERT=%s\n' "$cacert"
   [ "$insecure" = 1 ] && printf 'BEACON_INSECURE=1\n'
+  [ -n "$curl_extra" ] && printf 'BEACON_CURL_EXTRA=%s\n' "$curl_extra"
 } > "$CONF_DIR/env"
 chmod 600 "$CONF_DIR/env"
 say "設定寫入 $CONF_DIR/env"
@@ -201,6 +227,7 @@ say "設定寫入 $CONF_DIR/env"
 set -- -sS -o /dev/null -w '%{http_code}' -m 5
 [ -n "$cacert" ] && set -- "$@" --cacert "$cacert"
 [ "$insecure" = 1 ] && set -- "$@" -k
+[ -n "$curl_extra" ] && set -- "$@" $curl_extra
 code="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl -K - "$@" -X POST \
   -H 'Content-Type: application/json' \
   --data "{\"event\":\"InstallCheck\",\"session_id\":\"install-check\",\"agent\":\"install\"}" \
