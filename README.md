@@ -32,7 +32,7 @@ prompt、Claude 回覆、工具指令與檔案內容一律不送，也不掛 Pre
 | Claude Code | SessionStart、UserPromptSubmit、PostToolUse（只送事件名，不送工具內容）、Notification（權限、等輸入、elicitation）、Stop、SessionEnd |
 | Codex | notify 的 `agent-turn-complete` |
 
-`beacon` 永遠 exit 0、不輸出任何東西、背景 POST（2 秒 timeout），不會卡住 agent。
+`beacon` 是啟動器：每次執行已安裝的最新版 `beacon-core`，plugin 自動更新後已開著的 session 也會用到新版，不用重開。`beacon-core` 永遠 exit 0、不輸出任何東西、背景 POST（2 秒 timeout），不會卡住 agent。
 
 ## Windows
 

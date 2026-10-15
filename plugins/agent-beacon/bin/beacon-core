@@ -1,0 +1,139 @@
+#!/bin/sh
+# agent-beacon：把 agent 事件轉發到儀表板。
+#
+#   Claude Code hook：beacon claude        （事件 JSON 從 stdin 進來）
+#   Codex notify：    beacon codex '<json>'（事件 JSON 是最後一個參數）
+#
+# 規則：
+#   - 只送事件名、session id、cwd、host、agent、時間、/rename 取的名字、背景工作的類型與數量；
+#     prompt、回覆、工具內容、背景工作的指令與描述一律不送
+#   - 背景 POST，2 秒 timeout，永遠 exit 0
+#   - 不輸出任何東西（UserPromptSubmit / SessionStart 的 stdout 會被注入 Claude 的 context）
+
+exec >/dev/null 2>&1
+
+# 儀表板用這個判斷 session 是不是還在用舊版 beacon（hook 在 session 啟動時載入，更新後要重開才生效）
+BEACON_VERSION=5
+
+agent="${1:-claude}"
+[ $# -gt 0 ] && shift
+
+if [ "$agent" = codex ]; then
+  payload="${1:-}"
+else
+  payload="$(cat)"
+fi
+
+CONF_DIR="${AGENT_BEACON_HOME:-$HOME/.config/agent-beacon}"
+
+# Codex：安裝前若已有 notify，原本的指令照樣執行（一行一個參數）
+if [ "$agent" = codex ] && [ -r "$CONF_DIR/codex-notify-orig" ]; then
+  (
+    set --
+    while IFS= read -r arg || [ -n "$arg" ]; do set -- "$@" "$arg"; done < "$CONF_DIR/codex-notify-orig"
+    [ $# -gt 0 ] && "$@" "$payload"
+  ) &
+fi
+
+[ -r "$CONF_DIR/env" ] && . "$CONF_DIR/env"
+[ -n "${BEACON_URL:-}" ] && [ -n "${BEACON_TOKEN:-}" ] || exit 0
+
+# 從 JSON 取字串欄位，取第一個出現的（頂層欄位在前，工具參數裡的同名 key 在後）。
+# 跳脫過的引號（例如 prompt 裡的 \"cwd\"）不會被誤認成 key。
+field() {
+  printf '%s\n' "$payload" | tr '\n' ' ' \
+    | grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -n 1 \
+    | sed "s/^\"$1\"[[:space:]]*:[[:space:]]*\"//; s/\"\$//; s/\\\\*\$//"
+}
+
+if [ "$agent" = codex ]; then
+  event="$(field type)"
+  session="$(field thread-id)"
+else
+  event="$(field hook_event_name)"
+  session="$(field session_id)"
+fi
+# PostToolUse 的 payload 含工具參數與輸出，只取事件名與 session id
+cwd=""
+[ "$event" = PostToolUse ] || cwd="$(field cwd)"
+ntype="$(field notification_type)"
+[ -n "$event" ] && [ -n "$session" ] || exit 0
+
+# 使用者用 /rename 取的名字：transcript 裡最後一筆 custom-title（自動產生的 ai-title 不算）。
+# 只送名字本身。PostToolUse 太頻繁，不查。
+title=""
+if [ "$agent" = claude ] && [ "$event" != PostToolUse ]; then
+  # Windows 的路徑在 JSON 裡是 C:\\Users\\...，轉成 C:/Users/... Git Bash 才讀得到
+  tp="$(field transcript_path | sed 's|\\\\|/|g')"
+  [ -n "$tp" ] && [ -r "$tp" ] && title="$(grep -o '"customTitle":"[^"]*"' "$tp" 2>/dev/null | tail -n 1 \
+    | sed 's/^"customTitle":"//; s/"$//; s/\\*$//')"
+fi
+
+# Stop 時還在跑的背景工作（背景 shell、Monitor、subagent…）：只數類型，不送指令或描述。
+# payload 可能是多行 JSON、字串裡可能有任何字元，所以用 awk 逐字解析，只看 background_tasks 陣列
+# 裡每個物件的 type 與 status，略過已結束的。輸出例如 {"shell":1,"monitor":2}。
+background_counts() {
+  awk 'BEGIN { RS = "\001" }
+  {
+    s = $0; n = length(s); depth = 0; instr = 0; esc = 0; tok = ""; key = ""; inbg = 0; bgd = 0
+    for (i = 1; i <= n; i++) {
+      c = substr(s, i, 1)
+      if (instr) {
+        if (esc) { esc = 0; tok = tok c; continue }
+        if (c == "\\") { esc = 1; continue }
+        if (c != "\"") { tok = tok c; continue }
+        instr = 0
+        j = i + 1; while (j <= n && substr(s, j, 1) ~ /[ \t\r\n]/) j++
+        if (substr(s, j, 1) == ":") { key = tok; continue }
+        if (inbg && depth == bgd + 1) { if (key == "type") t = tok; else if (key == "status") st = tok }
+        key = ""; continue
+      }
+      if (c == "\"") { instr = 1; tok = ""; continue }
+      if (c == "{" || c == "[") {
+        depth++
+        if (c == "[" && key == "background_tasks" && depth == 2) { inbg = 1; bgd = depth }
+        if (inbg && c == "{" && depth == bgd + 1) { t = ""; st = "" }
+        key = ""; continue
+      }
+      if (c == "}" || c == "]") {
+        if (inbg && c == "}" && depth == bgd + 1 && t != "" &&
+            tolower(st) !~ /^(completed|complete|done|failed|killed|stopped|cancell?ed|error|exited)$/) cnt[t]++
+        if (inbg && c == "]" && depth == bgd) inbg = 0
+        depth--
+      }
+    }
+  }
+  END {
+    out = ""
+    for (k in cnt) { name = tolower(k); gsub(/[^a-z0-9]+/, "_", name); out = out (out == "" ? "" : ",") "\"" name "\":" cnt[k] }
+    printf "{%s}", out
+  }'
+}
+background="null"
+if [ "$agent" = claude ] && [ "$event" = Stop ]; then
+  background="$(printf '%s' "$payload" | background_counts 2>/dev/null)"
+  case "$background" in "{"*"}") ;; *) background="null" ;; esac
+fi
+
+host="$(hostname 2>/dev/null || uname -n)"
+ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+body=$(printf '{"event":"%s","session_id":"%s","agent":"%s","cwd":"%s","host":"%s","ts":"%s","notification_type":"%s","title":"%s","background":%s,"beacon":%s}' \
+  "$event" "$session" "$agent" "$cwd" "$host" "$ts" "$ntype" "$title" "$background" "$BEACON_VERSION")
+
+set -- -fsS -m 2 -X POST -H "Content-Type: application/json" --data "$body"
+[ -n "${BEACON_CACERT:-}" ] && set -- "$@" --cacert "$BEACON_CACERT"
+[ "${BEACON_INSECURE:-0}" = 1 ] && set -- "$@" -k
+# Windows Schannel 的 --ssl-no-revoke 等（install.sh 偵測後寫進 env）
+[ -n "${BEACON_CURL_EXTRA:-}" ] && set -- "$@" $BEACON_CURL_EXTRA
+
+# 有 setsid 就脫離 hook 的行程群組，agent 結束（SessionEnd）時請求不會被一起砍掉
+detach=""
+command -v setsid >/dev/null 2>&1 && detach="setsid"
+
+# token 走 curl 的 config stdin，不出現在 ps 的指令列
+(
+  trap '' HUP
+  printf 'header = "Authorization: Bearer %s"\n' "$BEACON_TOKEN" \
+    | $detach curl -K - "$@" "${BEACON_URL%/}/api/agent/events" &
+) &
+exit 0

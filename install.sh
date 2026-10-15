@@ -197,10 +197,10 @@ curl -V 2>/dev/null | grep -qi schannel && curl_extra="--ssl-no-revoke"
 
 # Codex 用的 beacon 固定放在這裡（Claude Code 用 plugin 自己的那份）
 here="$(cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
-if [ -n "$here" ] && [ -f "$here/plugins/agent-beacon/bin/beacon" ]; then
-  cp "$here/plugins/agent-beacon/bin/beacon" "$BEACON.tmp"
+if [ -n "$here" ] && [ -f "$here/plugins/agent-beacon/bin/beacon-core" ]; then
+  cp "$here/plugins/agent-beacon/bin/beacon-core" "$BEACON.tmp"
 else
-  curl -fsSL "https://raw.githubusercontent.com/$REPO/$REF/plugins/agent-beacon/bin/beacon" -o "$BEACON.tmp"
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/$REF/plugins/agent-beacon/bin/beacon-core" -o "$BEACON.tmp"
 fi
 chmod 755 "$BEACON.tmp" && mv "$BEACON.tmp" "$BEACON"
 
